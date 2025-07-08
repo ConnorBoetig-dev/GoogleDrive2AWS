@@ -16,6 +16,7 @@ docs/celtic.json
 *.tfvars
 !*.example.tfvars
 !terraform.tfvars
+!secrets.auto.tfvars
 
 # AWS
 *.pem
