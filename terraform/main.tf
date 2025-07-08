@@ -115,21 +115,10 @@ resource "aws_secretsmanager_secret" "google_credentials" {
 }
 
 # Secrets Manager Secret Version
+# This will be populated from a file or environment variable
 resource "aws_secretsmanager_secret_version" "google_credentials" {
   secret_id     = aws_secretsmanager_secret.google_credentials.id
-  secret_string = jsonencode({
-    type                        = "service_account"
-    project_id                  = "celtic-facility-465313-e4"
-    private_key_id              = "25137bacf5d92b3ec60a3d7db549c051c2eb5405"
-    private_key                 = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDEJrLgYw0WnEx1\nokRTx1ZmNmV+oHppcOABmmRc5W8nnJltxE2A/zoWS6WEiQ2jTAkEpxT2ET7enVPI\nyBF9CMgVWQRJDQhclVp47OqtfOT0Ujt3ie0eW8RbrGlxjxBuhF2gVZbE42zCrGv+\nfReJTjRvnQS7lmFotswHvqAQep8elaJMN4qpux+b3djPjeDypHI9mTu8Wiz/AY12\n8G7ptj3SueBEqaqZtoWquZZq6Dc4Gf+Q+UDgSf+MCvq2NfIjy4QyogItwFKoc2Jj\n9R+wTjhVmoyi0mKHIyrBOAFNw6Dot+MDfbQ9s99C9qr3n5yrY5dlWDY/ubJPmSNv\neJT1C3hFAgMBAAECggEAJDldWXERbraIrES+R5aNjyzGi58JXEWbKNChbkJ0x6T0\n9L+G7Ka1zH5F3/cLjLezBqfwiAzhRm1Zlr/T8vpXMRISZ4c/nxF59tER+d4RzkkN\ncGMJZkzeM2vgwTcBetd5Du4ffNbfNAhxnTruyM2ng2FFCXuZG6R+g4OhvclXb2cx\n5JRGxodX9tBHOZh6Z3ZBtpJKVnzvihKYVEF1KFgpsovAac8rLYovb5Rh5ruWWZmu\ngIptKSfIFZ8YXNH0EtrqebKRcANZb3WpUGl0rNR7CaLPkvL1hRjNUdorYVg9nzg1\nkNUVySB3kU2mhun2fIQGFruUhaypfM8elDxh3xLc1QKBgQDxkZQ2BJ8zfICdLnSc\nXoKgdNpQIN3lQoYFNDuPv1U+L8I/TD7f6u62CJP/DYs5vcjIzl/D7JNpkhKpl5Lq\nLsq4iAh8uapE957UibsTjEwaM42qiARQonn2yne5UakL3SM/b6RuCGvEk/Tk5faF\nW0iZ05Wgz9l3I4U4taX8oD9SOwKBgQDP3odsh4lPFp+V0rogjvUEK9zqXTV2ppZt\nyB2Fol29hbRzm+3kB1tCuaZ65Ff0S0D9AtbK0g/cyLmPVC+8JzJODd00QrjvESdI\nlC1Kgt7nHWEFQ5hwsb3m2g8Weo6kii13EsRMvVMWpgNHcUcAdXhHOZtB1vyn3HiH\nF+1/cnU3fwKBgEdS6mXAm5jCC99c1gVNSlhB6Ct8aMfGCngC4gshPPPtefbidjX6\n0ZxhkADgaNkVlfDkLhZVBXlILcZxAGmwgx5U29ynnQRb8ENknx24cMfTrOJK4qtE\nLaqWQR8wYy8jjcKvHed3CQqzfL0QwObC+v6gIC+o7tZkYHNL/sRGNCv9AoGAGXJ9\nk6y4A4WafcXxYUD+/8a64boNbHwSWFgyPQTWgvgWUjzZj5vS8UU2+z5vAgogZ5js\nYKH8rSOpi8FboqYNw35xAQ/WAfZQn9L8BG4nCZYQJYvT4p/vxo4VYMQaKEx+KmCS\nxW47+L7UEe/tKEI5Okb0GchO3+Heo3MrcPm7HdMCgYA6ATnv41qEan5JbjGNt1X6\ncdoSqC7a88MkGOvjJxLRvkmaTyq8OZAI6DJSYE4czhmLTkHvSEKgo8GMiwBfcTWs\n9LKZy6n7hbZdmGvEsokRAJj0XGG87TVy9E4Iov6PGEgTk5h8vC3uqwLnvfxjtpMO\n7YtSm89xD8Uz85meGooUFw==\n-----END PRIVATE KEY-----\n"
-    client_email                = "gdrive-backup-acc@celtic-facility-465313-e4.iam.gserviceaccount.com"
-    client_id                   = "108382266205555175998"
-    auth_uri                    = "https://accounts.google.com/o/oauth2/auth"
-    token_uri                   = "https://oauth2.googleapis.com/token"
-    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-    client_x509_cert_url        = "https://www.googleapis.com/robot/v1/metadata/x509/gdrive-backup-acc%40celtic-facility-465313-e4.iam.gserviceaccount.com"
-    universe_domain             = "googleapis.com"
-  })
+  secret_string = var.google_credentials_json
 
   lifecycle {
     ignore_changes = [secret_string]
@@ -244,6 +233,7 @@ resource "aws_lambda_function" "backup_function" {
     variables = {
       S3_BUCKET    = aws_s3_bucket.backup_bucket.id
       SECRET_NAME  = aws_secretsmanager_secret.google_credentials.name
+      MAX_WORKERS  = "5"
     }
   }
 

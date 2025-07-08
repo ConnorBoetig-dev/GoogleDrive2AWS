@@ -1,0 +1,55 @@
+# Secrets and credentials
+*.json
+!*.example.json
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+docs/celtic.json
+secrets.auto.tfvars
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.example.tfvars
+!terraform.tfvars
+
+# AWS
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Lambda packages
+*.zip
+lambda-layer/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local testing
+local-test/
+temp/

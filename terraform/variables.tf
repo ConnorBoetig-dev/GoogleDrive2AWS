@@ -45,3 +45,9 @@ variable "secret_recovery_window" {
   type        = number
   default     = 7
 }
+
+variable "google_credentials_json" {
+  description = "Google service account credentials JSON string"
+  type        = string
+  sensitive   = true
+}
