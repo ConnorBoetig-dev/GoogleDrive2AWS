@@ -7,7 +7,6 @@
 secrets/
 credentials/
 docs/celtic.json
-secrets.auto.tfvars
 
 # Terraform
 *.tfstate
