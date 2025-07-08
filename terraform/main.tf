@@ -223,7 +223,7 @@ resource "aws_lambda_function" "backup_function" {
   filename         = var.lambda_function_path
   function_name    = var.lambda_function_name
   role            = aws_iam_role.lambda_role.arn
-  handler         = "GDRIVE-backup.lambda_handler"
+  handler         = "gdrive.lambda_handler"
   source_code_hash = var.lambda_function_path != "" ? filebase64sha256(var.lambda_function_path) : null
   runtime         = "python3.9"
   memory_size     = 512

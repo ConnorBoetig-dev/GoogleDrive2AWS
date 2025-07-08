@@ -216,10 +216,10 @@ def process_single_file(service, file, owner_email, backup_date):
         file_path = get_file_path(service, file_id, final_name)
         
         # Create S3 key with user organization
-        # Format: gdrive-backup/{user_email}/{YYYY-MM-DD}/{file_path}
-        # Clean the email to be S3-friendly (replace @ with _at_)
-        safe_email = owner_email.replace('@', '_at_').replace('.', '_')
-        s3_key = f"gdrive-backup/{safe_email}/{backup_date}/{file_path}"
+        # Format: gdrive-backup/{username}/{YYYY-MM-DD}/{file_path}
+        # Extract username from email (everything before @)
+        username = owner_email.split('@')[0] if '@' in owner_email else owner_email
+        s3_key = f"gdrive-backup/{username}/{backup_date}/{file_path}"
         
         # Prepare metadata
         metadata = {
