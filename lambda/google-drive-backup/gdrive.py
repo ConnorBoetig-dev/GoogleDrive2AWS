@@ -90,39 +90,74 @@ def get_file_state(file_id):
         logger.warning(f"Error getting file state: {e}")
         return None
 
-def update_file_state(file_id, file_hash, modified_time, s3_key, file_size):
-    """Update file state in DynamoDB"""
+def update_file_state(file_id, file_hash, modified_time, s3_key, file_size, drive_md5_checksum=None):
+    """Update file state in DynamoDB with Google Drive metadata"""
     try:
-        file_state_table.put_item(
-            Item={
-                'file_id': file_id,
-                'file_hash': file_hash,
-                'modified_time': modified_time,
-                's3_key': s3_key,
-                'file_size': Decimal(str(file_size)),
-                'last_backup': datetime.now().isoformat(),
-                'ttl': int((datetime.now().timestamp() + 30 * 24 * 3600))  # 30 day TTL
-            }
-        )
+        item = {
+            'file_id': file_id,
+            'file_hash': file_hash,
+            'modified_time': modified_time,
+            's3_key': s3_key,
+            'file_size': Decimal(str(file_size)),
+            'last_backup': datetime.now().isoformat(),
+            'ttl': int((datetime.now().timestamp() + 30 * 24 * 3600))  # 30 day TTL
+        }
+        
+        # Add Google Drive metadata if available
+        if drive_md5_checksum:
+            item['drive_md5_checksum'] = drive_md5_checksum
+        
+        file_state_table.put_item(Item=item)
     except Exception as e:
         logger.error(f"Error updating file state: {e}")
 
-def should_backup_file(file_id, file_hash, modified_time):
-    """Check if file needs to be backed up based on state"""
+def should_backup_file(file_id, file_hash, modified_time, drive_md5_checksum=None):
+    """Check if file needs to be backed up based on state and Google Drive metadata"""
     state = get_file_state(file_id)
     if not state:
-        return True  # No previous backup
+        return True, "new file"  # No previous backup
     
-    # Check if file has changed
-    if state.get('file_hash') != file_hash:
-        return True
+    # Primary check: Google Drive MD5 checksum (if available)
+    if drive_md5_checksum and state.get('drive_md5_checksum'):
+        if state.get('drive_md5_checksum') != drive_md5_checksum:
+            return True, "MD5 checksum changed"
     
-    # Check if modified time is newer (fallback check)
+    # Secondary check: modified time
     if modified_time and state.get('modified_time'):
         if modified_time > state['modified_time']:
-            return True
+            return True, "modified time newer"
     
-    return False
+    # Final fallback: our calculated hash (requires download)
+    if file_hash and state.get('file_hash'):
+        if state.get('file_hash') != file_hash:
+            return True, "content hash changed"
+        else:
+            return False, f"content hash unchanged ({file_hash[:8]}...)"
+    
+    return False, "no changes detected"
+
+def should_download_file(file_id, modified_time, drive_md5_checksum=None):
+    """Check if file needs to be downloaded based on metadata only"""
+    state = get_file_state(file_id)
+    if not state:
+        return True, "new file"  # No previous backup, need to download
+    
+    # If we have Google Drive MD5 checksum, use it for comparison
+    if drive_md5_checksum and state.get('drive_md5_checksum'):
+        if state.get('drive_md5_checksum') != drive_md5_checksum:
+            return True, "MD5 checksum changed"
+        else:
+            return False, f"MD5 checksum unchanged ({drive_md5_checksum[:8]}...)"
+    
+    # Fallback to modified time comparison
+    if modified_time and state.get('modified_time'):
+        if modified_time > state['modified_time']:
+            return True, "modified time newer"
+        else:
+            return False, f"modified time unchanged ({modified_time})"
+    
+    # If we have no metadata to compare, we need to download
+    return True, "no metadata available - downloading to verify"
 
 def list_shared_drives(service):
     """List all shared drives accessible to the service account"""
@@ -152,14 +187,15 @@ def list_shared_drives(service):
         return []
 
 def list_files_from_drive(service, drive_id=None, drive_name=None):
-    """List files from a specific drive or My Drive"""
+    """List files from a specific drive or My Drive with optimized field selection"""
     files = []
     page_token = None
     
     query = "trashed=false"
+    # Optimized field selection for metadata-based filtering
     list_params = {
         'pageSize': 100,
-        'fields': "nextPageToken, files(id, name, mimeType, size, modifiedTime, owners, parents)",
+        'fields': "nextPageToken, files(id, name, mimeType, size, modifiedTime, owners, parents, md5Checksum)",
         'q': query,
         'supportsAllDrives': True,
         'includeItemsFromAllDrives': True
@@ -190,6 +226,48 @@ def list_files_from_drive(service, drive_id=None, drive_name=None):
     except Exception as e:
         logger.error(f"Error listing files: {e}")
         return []
+
+def get_files_metadata_batch(service, file_ids, fields="id,name,mimeType,size,modifiedTime,md5Checksum"):
+    """Get metadata for multiple files using batch API requests"""
+    from googleapiclient.http import BatchHttpRequest
+    
+    # Google Drive API allows up to 100 requests per batch
+    BATCH_SIZE = 100
+    all_files_metadata = []
+    
+    for i in range(0, len(file_ids), BATCH_SIZE):
+        batch_ids = file_ids[i:i + BATCH_SIZE]
+        batch_metadata = []
+        
+        def callback(request_id, response, exception):
+            if exception:
+                logger.warning(f"Error getting metadata for file {request_id}: {exception}")
+            else:
+                batch_metadata.append(response)
+        
+        try:
+            batch_request = BatchHttpRequest(callback=callback)
+            
+            for file_id in batch_ids:
+                batch_request.add(
+                    service.files().get(
+                        fileId=file_id,
+                        fields=fields,
+                        supportsAllDrives=True
+                    ),
+                    request_id=file_id
+                )
+            
+            batch_request.execute()
+            all_files_metadata.extend(batch_metadata)
+            
+            # Small delay to prevent rate limiting
+            time.sleep(RATE_LIMIT_DELAY)
+            
+        except Exception as e:
+            logger.error(f"Error executing batch request: {e}")
+    
+    return all_files_metadata
 
 def get_file_path(service, file_id, file_name):
     """Get the full path of a file including parent folders"""
@@ -348,13 +426,20 @@ def process_single_file(file, owner_email, backup_date, drive_name=None):
     file_id = file['id']
     mime_type = file.get('mimeType', 'application/octet-stream')
     modified_time = file.get('modifiedTime', '')
+    drive_md5_checksum = file.get('md5Checksum')
     
     try:
         # Skip folders
         if mime_type == 'application/vnd.google-apps.folder':
-            return False, 0
+            return {'status': 'folder', 'bytes': 0, 'reason': 'folder'}
         
         logger.info(f"Processing: {file_name} (owner: {owner_email}, drive: {drive_name or 'My Drive'})")
+        
+        # Pre-download check using metadata only
+        should_download, reason = should_download_file(file_id, modified_time, drive_md5_checksum)
+        if not should_download:
+            logger.info(f"Skipping {file_name} - {reason}")
+            return {'status': 'skipped', 'bytes': 0, 'reason': reason}
         
         # Create thread-safe service instance
         service = get_google_drive_service()
@@ -363,12 +448,16 @@ def process_single_file(file, owner_email, backup_date, drive_name=None):
         file_content, final_name, file_hash = download_file_streaming(service, file_id, file_name, mime_type)
         
         if not file_content or not final_name:
-            return False, 0
+            return {'status': 'failed', 'bytes': 0, 'reason': 'download failed'}
         
-        # Check if file needs backup
-        if not should_backup_file(file_id, file_hash, modified_time):
-            logger.info(f"Skipping {file_name} - already backed up and unchanged")
-            return True, 0  # Success but no bytes transferred
+        # Final check if file needs backup (with downloaded hash)
+        should_backup, reason = should_backup_file(file_id, file_hash, modified_time, drive_md5_checksum)
+        if not should_backup:
+            logger.info(f"Skipping {file_name} - {reason} (post-download check)")
+            return {'status': 'skipped', 'bytes': 0, 'reason': reason + ' (post-download)'}
+        
+        # If we got here, we need to upload
+        logger.info(f"Uploading {file_name} - {reason}")
         
         # Get file path
         file_path = get_file_path(service, file_id, final_name)
@@ -399,21 +488,28 @@ def process_single_file(file, owner_email, backup_date, drive_name=None):
         file_size = len(file_content) if isinstance(file_content, bytes) else len(file_content.encode('utf-8'))
         
         if upload_to_s3_multipart(file_content, s3_key, metadata):
-            # Update state tracking
-            update_file_state(file_id, file_hash, modified_time, s3_key, file_size)
-            return True, file_size
+            # Update state tracking with Google Drive metadata
+            update_file_state(file_id, file_hash, modified_time, s3_key, file_size, drive_md5_checksum)
+            logger.info(f"Successfully uploaded to S3: {s3_key}")
+            return {'status': 'uploaded', 'bytes': file_size, 'reason': reason}
         else:
-            return False, 0
+            return {'status': 'failed', 'bytes': 0, 'reason': 'S3 upload failed'}
         
     except Exception as e:
         logger.error(f"Error processing {file_name}: {str(e)}")
-        return False, 0
+        return {'status': 'failed', 'bytes': 0, 'reason': f'exception: {str(e)}'}
 
 def process_files_batch(files, owner_email, backup_date, drive_name=None):
     """Process a batch of files using thread pool"""
-    success_count = 0
-    failed_count = 0
-    total_bytes = 0
+    stats = {
+        'uploaded': 0,
+        'skipped': 0,
+        'failed': 0,
+        'folders': 0,
+        'total_bytes': 0,
+        'skip_reasons': {},
+        'upload_reasons': {}
+    }
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Submit all files for processing
@@ -431,20 +527,31 @@ def process_files_batch(files, owner_email, backup_date, drive_name=None):
         for future in as_completed(future_to_file):
             file = future_to_file[future]
             try:
-                success, bytes_processed = future.result()
-                if success:
-                    success_count += 1
-                    total_bytes += bytes_processed
-                else:
-                    failed_count += 1
+                result = future.result()
+                status = result['status']
+                bytes_processed = result['bytes']
+                reason = result['reason']
+                
+                if status == 'uploaded':
+                    stats['uploaded'] += 1
+                    stats['total_bytes'] += bytes_processed
+                    stats['upload_reasons'][reason] = stats['upload_reasons'].get(reason, 0) + 1
+                elif status == 'skipped':
+                    stats['skipped'] += 1
+                    stats['skip_reasons'][reason] = stats['skip_reasons'].get(reason, 0) + 1
+                elif status == 'failed':
+                    stats['failed'] += 1
+                elif status == 'folder':
+                    stats['folders'] += 1
+                    
             except Exception as e:
                 logger.error(f"Failed to process file {file.get('name', 'unknown')}: {str(e)}")
-                failed_count += 1
+                stats['failed'] += 1
             
             # Small delay to prevent rate limiting
             time.sleep(RATE_LIMIT_DELAY)
     
-    return success_count, failed_count, total_bytes
+    return stats
 
 def send_metrics(user_email, file_count, success_count, total_bytes, drive_name=None):
     """Send metrics to CloudWatch"""
@@ -526,23 +633,62 @@ def lambda_handler(event, context):
                 logger.info(f"Processing {len(files)} files for user: {owner_email}")
                 
                 # Process in batches
+                owner_stats = {
+                    'uploaded': 0,
+                    'skipped': 0,
+                    'failed': 0,
+                    'folders': 0,
+                    'total_bytes': 0,
+                    'skip_reasons': {},
+                    'upload_reasons': {}
+                }
+                
                 for i in range(0, len(files), BATCH_SIZE):
                     batch = files[i:i + BATCH_SIZE]
-                    success, failed, bytes_transferred = process_files_batch(
+                    batch_stats = process_files_batch(
                         batch, owner_email, backup_date
                     )
                     
-                    overall_stats['total_success'] += success
-                    overall_stats['total_failed'] += failed
-                    overall_stats['total_bytes'] += bytes_transferred
+                    # Merge batch stats into owner stats
+                    owner_stats['uploaded'] += batch_stats['uploaded']
+                    owner_stats['skipped'] += batch_stats['skipped']
+                    owner_stats['failed'] += batch_stats['failed']
+                    owner_stats['folders'] += batch_stats['folders']
+                    owner_stats['total_bytes'] += batch_stats['total_bytes']
+                    
+                    # Merge reason counts
+                    for reason, count in batch_stats['skip_reasons'].items():
+                        owner_stats['skip_reasons'][reason] = owner_stats['skip_reasons'].get(reason, 0) + count
+                    for reason, count in batch_stats['upload_reasons'].items():
+                        owner_stats['upload_reasons'][reason] = owner_stats['upload_reasons'].get(reason, 0) + count
+                
+                # Update overall stats
+                overall_stats['total_success'] += owner_stats['uploaded']
+                overall_stats['total_failed'] += owner_stats['failed']
+                overall_stats['total_bytes'] += owner_stats['total_bytes']
+                overall_stats['total_skipped'] += owner_stats['skipped']
                 
                 overall_stats['total_files'] += len(files)
                 overall_stats['users_processed'] += 1
                 
                 # Send metrics
                 send_metrics(owner_email, len(files), 
-                           overall_stats['total_success'], 
-                           overall_stats['total_bytes'])
+                           owner_stats['uploaded'], 
+                           owner_stats['total_bytes'])
+                
+                # Log detailed stats for this owner
+                logger.info(f"User {owner_email} summary: {owner_stats['uploaded']} uploaded, "
+                           f"{owner_stats['skipped']} skipped, {owner_stats['failed']} failed")
+                
+                # Log skip reasons if any
+                if owner_stats['skip_reasons']:
+                    for reason, count in owner_stats['skip_reasons'].items():
+                        logger.info(f"  Skipped {count} files: {reason}")
+                
+                # Log upload reasons if any
+                if owner_stats['upload_reasons']:
+                    for reason, count in owner_stats['upload_reasons'].items():
+                        logger.info(f"  Uploaded {count} files: {reason}")
         
         # Process Shared Drives if enabled
         if ENABLE_SHARED_DRIVES:
@@ -558,43 +704,79 @@ def lambda_handler(event, context):
                 
                 if drive_files:
                     # For shared drives, use the drive name as the primary organizer
-                    success_count = 0
-                    failed_count = 0
-                    bytes_count = 0
+                    drive_stats = {
+                        'uploaded': 0,
+                        'skipped': 0,
+                        'failed': 0,
+                        'folders': 0,
+                        'total_bytes': 0,
+                        'skip_reasons': {},
+                        'upload_reasons': {}
+                    }
                     
                     # Process in batches
                     for i in range(0, len(drive_files), BATCH_SIZE):
                         batch = drive_files[i:i + BATCH_SIZE]
-                        success, failed, bytes_transferred = process_files_batch(
+                        batch_stats = process_files_batch(
                             batch, 'shared-drive', backup_date, drive_name
                         )
                         
-                        success_count += success
-                        failed_count += failed
-                        bytes_count += bytes_transferred
+                        # Merge batch stats into drive stats
+                        drive_stats['uploaded'] += batch_stats['uploaded']
+                        drive_stats['skipped'] += batch_stats['skipped']
+                        drive_stats['failed'] += batch_stats['failed']
+                        drive_stats['folders'] += batch_stats['folders']
+                        drive_stats['total_bytes'] += batch_stats['total_bytes']
+                        
+                        # Merge reason counts
+                        for reason, count in batch_stats['skip_reasons'].items():
+                            drive_stats['skip_reasons'][reason] = drive_stats['skip_reasons'].get(reason, 0) + count
+                        for reason, count in batch_stats['upload_reasons'].items():
+                            drive_stats['upload_reasons'][reason] = drive_stats['upload_reasons'].get(reason, 0) + count
                     
                     overall_stats['total_files'] += len(drive_files)
-                    overall_stats['total_success'] += success_count
-                    overall_stats['total_failed'] += failed_count
-                    overall_stats['total_bytes'] += bytes_count
+                    overall_stats['total_success'] += drive_stats['uploaded']
+                    overall_stats['total_failed'] += drive_stats['failed']
+                    overall_stats['total_bytes'] += drive_stats['total_bytes']
+                    overall_stats['total_skipped'] += drive_stats['skipped']
                     overall_stats['drives_processed'] += 1
                     
                     overall_stats['summaries'][f"SharedDrive:{drive_name}"] = {
                         'files': len(drive_files),
-                        'success': success_count,
-                        'failed': failed_count,
-                        'bytes': bytes_count
+                        'uploaded': drive_stats['uploaded'],
+                        'skipped': drive_stats['skipped'],
+                        'failed': drive_stats['failed'],
+                        'bytes': drive_stats['total_bytes']
                     }
                     
                     # Send metrics
                     send_metrics('shared-drive', len(drive_files), 
-                               success_count, bytes_count, drive_name)
+                               drive_stats['uploaded'], drive_stats['total_bytes'], drive_name)
+                    
+                    # Log detailed stats for this drive
+                    logger.info(f"Shared Drive {drive_name} summary: {drive_stats['uploaded']} uploaded, "
+                               f"{drive_stats['skipped']} skipped, {drive_stats['failed']} failed")
+                    
+                    # Log skip reasons if any
+                    if drive_stats['skip_reasons']:
+                        for reason, count in drive_stats['skip_reasons'].items():
+                            logger.info(f"  Skipped {count} files: {reason}")
+                    
+                    # Log upload reasons if any
+                    if drive_stats['upload_reasons']:
+                        for reason, count in drive_stats['upload_reasons'].items():
+                            logger.info(f"  Uploaded {count} files: {reason}")
         
-        # Calculate skipped files
-        overall_stats['total_skipped'] = overall_stats['total_files'] - \
-                                       overall_stats['total_success'] - \
-                                       overall_stats['total_failed']
+        # Enhanced final summary
+        logger.info("=== BACKUP SUMMARY ===")
+        logger.info(f"Total Files Processed: {overall_stats['total_files']}")
+        logger.info(f"  ✅ Uploaded: {overall_stats['total_success']} files ({overall_stats['total_bytes']:,} bytes)")
+        logger.info(f"  ⏭️  Skipped: {overall_stats['total_skipped']} files")
+        logger.info(f"  ❌ Failed: {overall_stats['total_failed']} files")
+        logger.info(f"Users: {overall_stats['users_processed']}, Shared Drives: {overall_stats['drives_processed']}")
+        logger.info("======================")
         
+        # Legacy format for compatibility
         logger.info(f"Backup completed. Users: {overall_stats['users_processed']}, "
                    f"Shared Drives: {overall_stats['drives_processed']}, "
                    f"Files: {overall_stats['total_success']}/{overall_stats['total_files']} "
