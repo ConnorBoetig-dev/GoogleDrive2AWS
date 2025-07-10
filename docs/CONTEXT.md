@@ -15,36 +15,46 @@
 - **Runtime**: Python 3.9
 - **Memory**: 512 MB
 - **Timeout**: 300 seconds
+- **Deployment Method**: AWS Console (GUI) preferred
 
 ## Lambda Environment Variables
 - `S3_BUCKET` - S3 bucket name
 - `SECRET_NAME` - Secrets Manager secret name
 
 ## What I Need
-Simple Terraform configuration to auto-provision this exact setup in a new AWS account. Just the baseline - I'll add features later.
+Clear documentation and scripts to manually provision this exact setup in a new AWS account. Just the baseline - I'll add features later.
 
 ## Project Structure
 ```
-AWS-BACKUPS2/
+GoogleDrive2AWS/
 ├── lambda/
-│   └── google-drive-backup/
-│       └── GDRIVE-backup.py    # My working Lambda code
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── terraform.tfvars
-└── CLAUDE_CODE_CONTEXT.md      # This file
+│   ├── google-drive-backup/
+│   │   ├── gdrive.py           # Main Lambda code
+│   │   └── ENTERPRISE_SETUP.md # Enterprise setup guide
+│   └── gmail-backup/
+│       └── lambda_function.py  # Gmail backup code
+├── docs/
+│   ├── CONTEXT.md             # This file
+│   ├── improvements.md        # Enhancement proposals
+│   └── SECRET_HANDLING.md     # Security guidelines
+├── ARCHITECTURE.md            # System design
+├── REPLICATION.md            # Manual setup guide
+├── RESTORATION_DESIGN.md     # Restore procedures
+└── README.md                 # Project overview
 ```
 
 ## Lambda Code Summary
-- Searches for "backup test" folder in Google Drive
+- Backs up all files accessible by the service account
+- Supports both personal drives and Shared Drives
 - Downloads files and converts Google Docs→PDF, Sheets→Excel
-- Uploads to S3 at path: gdrive-backup/YYYY-MM-DD/filename
+- Uploads to S3 at path: {username}/{date}/{folder_path}/{filename}
 - Uses KMS encryption for S3 uploads
+- Supports incremental backups with DynamoDB state tracking
+- Concurrent processing with configurable thread count
 
 ## Important Notes
 - Everything is already working in AWS
-- I just need Terraform to recreate it elsewhere
+- Manual setup instructions are provided in REPLICATION.md
 - Keep it simple - no fancy features yet
-- I'll handle packaging/deployment myself
+- AWS Console (GUI) steps are documented throughout
+- Can be deployed using AWS Console, CLI, or SDKs (Console preferred)

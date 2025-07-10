@@ -30,13 +30,18 @@
 ## Manual Setup Requirements
 
 ### 1. **DynamoDB Table**
-Create a DynamoDB table with the following specifications:
-```
-Table Name: gdrive-backup-state
-Partition Key: file_id (String)
-Billing Mode: Pay per request (or provisioned with auto-scaling)
-TTL Attribute: ttl (enabled on the 'ttl' field)
-```
+Create a DynamoDB table via AWS Console:
+
+1. Navigate to **DynamoDB** → **Tables** → **Create table**
+2. Table details:
+   - Table Name: `gdrive-backup-state`
+   - Partition Key: `file_id` (String)
+   - Table settings: "Customize settings"
+   - Capacity mode: "On-demand" (Pay per request)
+3. After creation:
+   - Go to **Additional settings** tab
+   - Enable TTL on the `ttl` field
+   - This automatically deletes old entries after 30 days
 
 ### 2. **Environment Variables**
 Add these to your Lambda function:
@@ -52,12 +57,24 @@ LARGE_FILE_THRESHOLD=104857600   # 100MB in bytes
 ```
 
 ### 3. **Lambda Configuration**
-- **Memory**: 1024 MB minimum (2048 MB recommended for large files)
-- **Timeout**: 900 seconds (15 minutes)
-- **Concurrency**: Set reserved concurrency to prevent throttling
+
+**AWS Console Steps:**
+1. Navigate to **Lambda** → Select your function
+2. **Configuration** tab → **General configuration** → **Edit**
+   - Memory: `1024 MB` minimum (2048 MB recommended for large files)
+   - Timeout: `15 minutes` (900 seconds)
+3. **Configuration** tab → **Concurrency** → **Edit**
+   - Reserved concurrent executions: Set a value (e.g., 10) to prevent throttling
 
 ### 4. **IAM Permissions**
-Add these permissions to your Lambda execution role:
+
+**AWS Console Steps to update Lambda execution role:**
+
+1. Navigate to **IAM** → **Roles**
+2. Search for and click on your Lambda execution role
+3. **Permissions** tab → **Add permissions** → **Create inline policy**
+4. Click **JSON** tab and paste the following policy:
+
 ```json
 {
     "Version": "2012-10-17",
@@ -109,6 +126,12 @@ Add these permissions to your Lambda execution role:
 }
 ```
 
+5. Click **Review policy**
+6. Name: `gdrive-backup-enterprise-policy`
+7. Click **Create policy**
+
+**Note:** Replace `your-bucket-name` and `your-secret-name` with actual values.
+
 ### 5. **Google Service Account Permissions**
 For Shared Drives support, ensure your service account:
 1. Is added as a member to each Shared Drive with "Viewer" access
@@ -138,9 +161,17 @@ Metrics include dimensions for:
 ## Cost Optimization
 
 1. **DynamoDB**: Uses TTL to automatically delete old entries after 30 days
+   - Configure via **DynamoDB** → Table → **Additional settings** → **Time to Live**
+
 2. **S3**: Enable lifecycle policies to move old backups to cheaper storage classes
+   - Navigate to **S3** → Bucket → **Management** → **Create lifecycle rule**
+   - Add transitions: 30 days → Standard-IA, 90 days → Glacier, 365 days → Deep Archive
+
 3. **Lambda**: Reserved concurrency prevents unexpected scaling costs
+   - Set via **Lambda** → Function → **Configuration** → **Concurrency**
+
 4. **Incremental Backups**: Reduces data transfer and storage costs by 80-95%
+   - Automatically enabled when DynamoDB table is configured
 
 ## Troubleshooting
 

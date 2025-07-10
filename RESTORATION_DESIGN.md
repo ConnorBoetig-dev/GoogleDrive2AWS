@@ -408,20 +408,82 @@ def list_backup_files(user, date):
 ## Required AWS Changes
 
 ### 1. Update Lambda Execution Role
-Add Google Drive write permissions:
-```python
-scopes=['https://www.googleapis.com/auth/drive.file']
-```
 
-### 2. API Gateway
-Create REST API for the Flask endpoints
+**AWS Console Steps:**
+1. Navigate to **IAM** → **Roles** → Select your Lambda execution role
+2. Update the inline policy to include Google Drive write permissions
+3. When creating the restore Lambda function, ensure it uses appropriate Google API scopes:
+   ```python
+   scopes=['https://www.googleapis.com/auth/drive.file']
+   ```
 
-### 3. EC2/ECS/App Runner
-Host the Flask application
+### 2. API Gateway Setup
 
-### 4. Additional DynamoDB Tables
-- restore_jobs
-- restore_history
-- user_permissions
+**AWS Console Steps:**
+1. Navigate to **API Gateway** → **Create API**
+2. Choose "REST API" → **Build**
+3. API details:
+   - API name: `gdrive-restore-api`
+   - Description: `REST API for Google Drive restoration dashboard`
+4. Create resources and methods for each endpoint:
+   - **Resources** → **Create Resource** for each path
+   - **Actions** → **Create Method** for GET/POST
+   - Integration type: "Lambda Function"
+   - Select appropriate Lambda functions
+5. **Deploy API**:
+   - **Actions** → **Deploy API**
+   - Stage name: `prod`
+
+### 3. Host Flask Application
+
+**Option A: AWS App Runner (Easiest)**
+1. Navigate to **App Runner** → **Create service**
+2. Source: "Source code repository" or "Container image"
+3. Configure build settings for Flask app
+4. Service settings:
+   - Service name: `gdrive-restore-dashboard`
+   - Port: `5000` (Flask default)
+5. Configure environment variables for API endpoints
+
+**Option B: EC2 Instance**
+1. Navigate to **EC2** → **Launch instance**
+2. Choose Amazon Linux 2 or Ubuntu
+3. Instance type: t3.small or larger
+4. Configure security group:
+   - Allow HTTP (80) and HTTPS (443)
+   - Allow SSH (22) for management
+5. After launch, install Python, Flask, and dependencies
+6. Deploy application and configure nginx/Apache
+
+**Option C: ECS with Fargate**
+1. Navigate to **ECS** → **Create cluster**
+2. Create task definition for Flask app
+3. Create service with Application Load Balancer
+4. Configure auto-scaling as needed
+
+### 4. Create Additional DynamoDB Tables
+
+**AWS Console Steps:**
+
+**Table 1: restore_jobs**
+1. Navigate to **DynamoDB** → **Create table**
+2. Configuration:
+   - Table name: `restore_jobs`
+   - Partition key: `job_id` (String)
+   - Capacity: On-demand
+3. Click **Create table**
+
+**Table 2: restore_history**
+1. **Create table**:
+   - Table name: `restore_history`
+   - Partition key: `user_email` (String)
+   - Sort key: `timestamp` (String)
+   - Capacity: On-demand
+
+**Table 3: user_permissions**
+1. **Create table**:
+   - Table name: `user_permissions`
+   - Partition key: `user_email` (String)
+   - Capacity: On-demand
 
 This design provides a complete restoration solution with a user-friendly interface for browsing and restoring Google Drive backups.

@@ -2,7 +2,7 @@
 
 ## System Architecture
 
-This solution creates an automated, serverless backup system that periodically copies files from Google Drive (including Shared Drives) to Amazon S3, with incremental backup capabilities and enterprise-grade performance.
+This solution creates an automated, serverless backup system that periodically copies files from Google Drive (including Shared Drives) to Amazon S3, with incremental backup capabilities and enterprise-grade performance. The system can be deployed manually using AWS CLI/Console or programmatically via AWS SDKs.
 
 ### Core Components
 
@@ -28,28 +28,36 @@ This solution creates an automated, serverless backup system that periodically c
 
 ### 2. AWS Infrastructure
 
-**S3 Bucket:**
-- Create bucket (e.g., `gdrive-backup-{unique-id}`)
-- Enable versioning
-- Enable server-side encryption (AWS KMS)
-- Configure lifecycle policies for cost optimization (optional)
+**S3 Bucket Setup via AWS Console:**
+- Navigate to **S3** → **Create bucket**
+- Bucket name: `gdrive-backup-{unique-id}`
+- In bucket settings:
+  - **Versioning**: Enable
+  - **Default encryption**: Enable server-side encryption (SSE-S3 or SSE-KMS)
+  - **Block Public Access**: Keep all settings enabled
+- After creation, go to **Management** tab → **Create lifecycle rule** for cost optimization
 
-**DynamoDB Table:**
+**DynamoDB Table Setup via AWS Console:**
+- Navigate to **DynamoDB** → **Create table**
 - Table name: `gdrive-backup-state`
 - Partition key: `file_id` (String)
-- Billing mode: On-demand
-- Enable TTL on `ttl` attribute (30-day expiration)
+- Table settings: Customize settings → On-demand mode
+- After creation: **Additional settings** → **Time to Live** → Enable on `ttl` attribute
 
-**Secrets Manager:**
-- Create secret named `connor-gdrive-backup-credentials` (or your chosen name)
-- Store the entire Google service account JSON as the secret value
+**Secrets Manager Setup via AWS Console:**
+- Navigate to **Secrets Manager** → **Store a new secret**
+- Secret type: "Other type of secret"
+- In "Plaintext" tab: Paste entire Google service account JSON
+- Secret name: `connor-gdrive-backup-credentials` (or your chosen name)
 
-**Lambda Function:**
+**Lambda Function Setup via AWS Console:**
+- Navigate to **Lambda** → **Create function**
+- Function name: `gdrive-backup`
 - Runtime: Python 3.9+
-- Memory: 2048 MB (minimum 1024 MB)
-- Timeout: 900 seconds (15 minutes)
-- Handler: `gdrive.lambda_handler`
 - Architecture: x86_64
+- After creation, configure:
+  - **Configuration** → **General configuration**: Memory 2048 MB, Timeout 900 seconds
+  - **Runtime settings**: Handler `gdrive.lambda_handler`
 
 **Environment Variables:**
 ```
@@ -63,25 +71,53 @@ RATE_LIMIT_DELAY=0.05
 LARGE_FILE_THRESHOLD=104857600
 ```
 
-**Lambda Execution Role:**
-Create IAM role with trust relationship to Lambda service and attach policy with:
-- DynamoDB: GetItem, PutItem, UpdateItem on the state table
-- S3: PutObject, GetObject, ListBucket, multipart operations on your bucket
-- Secrets Manager: GetSecretValue on your secret
-- CloudWatch: PutMetricData, CreateLogGroup, CreateLogStream, PutLogEvents
-- KMS: Decrypt, GenerateDataKey (for encryption)
+**Lambda Execution Role Setup via AWS Console:**
+- Navigate to **IAM** → **Roles** → **Create role**
+- Trusted entity: AWS service → Lambda
+- Attach `AWSLambdaBasicExecutionRole`
+- After creation, add inline policy with permissions for:
+  - **DynamoDB**: GetItem, PutItem, UpdateItem on the state table
+  - **S3**: PutObject, GetObject, ListBucket, multipart operations on your bucket
+  - **Secrets Manager**: GetSecretValue on your secret
+  - **CloudWatch**: PutMetricData
+  - **KMS**: Decrypt, GenerateDataKey (if using KMS encryption)
 
-**EventBridge Rule:**
-- Schedule expression: `cron(0 16 */2 * ? *)` (Every other day at 4 PM)
-- Target: Your Lambda function
+**EventBridge Rule Setup via AWS Console:**
+- Navigate to **EventBridge** → **Rules** → **Create rule**
+- Rule type: Schedule
+- Schedule pattern: Cron expression `0 16 */2 * ? *` (Every other day at 4 PM)
+- Target: Lambda function → Select your `gdrive-backup` function
 
 ### 3. Code Deployment
 
-Deploy the Python code (`gdrive.py`) to Lambda with required dependencies:
-- google-auth
-- google-auth-httplib2
-- google-api-python-client
-- boto3 (included in Lambda runtime)
+**Code Deployment via AWS Console:**
+
+1. **Create Lambda Layer for Dependencies:**
+   - Prepare dependencies locally:
+     ```bash
+     pip install --target ./python google-api-python-client google-auth google-auth-httplib2
+     zip -r layer.zip python/
+     ```
+   - Navigate to **Lambda** → **Layers** → **Create layer**
+   - Upload the `layer.zip` file
+   - Compatible runtimes: Python 3.9
+
+2. **Deploy Function Code:**
+   - Create ZIP file containing `gdrive.py`
+   - Navigate to **Lambda** → Select your function
+   - **Code** tab → **Upload from** → **.zip file**
+   - Upload your function ZIP
+
+3. **Attach Layer:**
+   - In function configuration, scroll to **Layers**
+   - Click **Add a layer** → **Custom layers**
+   - Select your dependencies layer
+
+4. **Configure Environment Variables:**
+   - **Configuration** → **Environment variables** → **Edit**
+   - Add all required variables (S3_BUCKET, SECRET_NAME, etc.)
+
+For detailed step-by-step instructions, see [REPLICATION.md](REPLICATION.md).
 
 ## How It Works
 

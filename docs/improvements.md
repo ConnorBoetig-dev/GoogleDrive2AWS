@@ -85,6 +85,14 @@ def process_files_batch(service, files, max_workers=5):
 - Consider using Lambda containers for more control
 - Implement step functions for orchestrating large backups
 
+**Update Lambda configuration via CLI:**
+```bash
+aws lambda update-function-configuration \
+  --function-name gdrive-backup \
+  --memory-size 2048 \
+  --timeout 900
+```
+
 ## 4. Monitoring & Observability
 
 ### CloudWatch Metrics
@@ -95,10 +103,22 @@ Create custom metrics for:
 - Failed backups by reason
 
 ### DynamoDB Tracking Table
-Create a table to track:
-```
+Create a table to track backup statistics per user:
+
+**AWS Console Steps:**
+1. Navigate to **DynamoDB** → **Create table**
+2. Table configuration:
+   - Table name: `gdrive-backup-tracking`
+   - Partition key: `user_email` (String)
+   - Sort key: `backup_date` (String)
+   - Capacity: On-demand mode
+3. Click **Create table**
+
+**Table structure will store:**
+```json
 {
   "user_email": "user@example.com",
+  "backup_date": "2024-01-10",
   "last_backup": "2024-01-10T10:00:00Z",
   "total_files": 1234,
   "total_size_mb": 5678,
@@ -111,22 +131,33 @@ Create a table to track:
 
 ### S3 Intelligent-Tiering
 Instead of fixed lifecycle rules, use Intelligent-Tiering for automatic optimization:
-```hcl
-resource "aws_s3_bucket_intelligent_tiering_configuration" "backup_tiering" {
-  bucket = aws_s3_bucket.backup_bucket.id
-  name   = "EntireBucket"
-  
-  tiering {
-    access_tier = "ARCHIVE_ACCESS"
-    days        = 90
-  }
-  
-  tiering {
-    access_tier = "DEEP_ARCHIVE_ACCESS"
-    days        = 180
-  }
-}
+
+**AWS CLI:**
+```bash
+aws s3api put-bucket-intelligent-tiering-configuration \
+  --bucket your-backup-bucket \
+  --id EntireBucket \
+  --intelligent-tiering-configuration '{
+    "Id": "EntireBucket",
+    "Status": "Enabled",
+    "Tierings": [
+      {
+        "Days": 90,
+        "AccessTier": "ARCHIVE_ACCESS"
+      },
+      {
+        "Days": 180,
+        "AccessTier": "DEEP_ARCHIVE_ACCESS"
+      }
+    ]
+  }'
 ```
+
+**AWS Console:**
+1. Navigate to S3 bucket → Management tab
+2. Create Intelligent-Tiering configuration
+3. Set Archive Access after 90 days
+4. Set Deep Archive Access after 180 days
 
 ### Deduplication
 - Implement file hash checking to avoid duplicate uploads
@@ -145,27 +176,64 @@ def get_user_kms_key(user_email):
 
 ### Access Logging
 Enable S3 access logging for audit trails:
-```hcl
-resource "aws_s3_bucket_logging" "backup_logging" {
-  bucket = aws_s3_bucket.backup_bucket.id
-  target_bucket = aws_s3_bucket.log_bucket.id
-  target_prefix = "backup-logs/"
-}
+
+**AWS CLI:**
+```bash
+# Create logging bucket
+aws s3 mb s3://your-backup-logs-bucket
+
+# Enable logging
+aws s3api put-bucket-logging --bucket your-backup-bucket \
+  --bucket-logging-status '{
+    "LoggingEnabled": {
+      "TargetBucket": "your-backup-logs-bucket",
+      "TargetPrefix": "backup-logs/"
+    }
+  }'
 ```
+
+**AWS Console:**
+1. Navigate to S3 bucket → Properties tab
+2. Edit Server access logging
+3. Enable logging and specify target bucket
 
 ## 7. Backup Scheduling & Orchestration
 
 ### EventBridge Rules per User
 Create individual schedules for different users/groups:
-```hcl
-resource "aws_cloudwatch_event_rule" "backup_schedule" {
-  for_each = var.user_schedules
-  
-  name                = "backup-${each.key}"
-  schedule_expression = each.value.schedule
-  
-  description = "Backup schedule for ${each.key}"
+
+**AWS CLI:**
+```bash
+# Create rule for specific user group
+aws events put-rule \
+  --name backup-engineering-team \
+  --schedule-expression "cron(0 2 * * ? *)" \
+  --description "Backup schedule for engineering team"
+
+# Add Lambda target
+aws events put-targets \
+  --rule backup-engineering-team \
+  --targets "Id"="1","Arn"="arn:aws:lambda:region:account:function:gdrive-backup","Input"='{"user_group":"engineering"}'
+```
+
+**Programmatic approach (Python/boto3):**
+```python
+import boto3
+
+events = boto3.client('events')
+
+user_schedules = {
+    'engineering': 'cron(0 2 * * ? *)',
+    'marketing': 'cron(0 3 * * ? *)',
+    'finance': 'cron(0 4 * * ? *)'
 }
+
+for group, schedule in user_schedules.items():
+    events.put_rule(
+        Name=f'backup-{group}',
+        ScheduleExpression=schedule,
+        Description=f'Backup schedule for {group}'
+    )
 ```
 
 ### SQS Queue for Large Batches
